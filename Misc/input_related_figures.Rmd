@@ -1,0 +1,834 @@
+---
+title: "Input Data Processing Report for DBAT_1_2021"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: true
+    number_sections: true
+params: 
+  topography: false
+  ssurgo: false
+---
+
+<style type="text/css">
+
+body{ /* Normal  */
+      font-size: 20px;
+  }
+td {  /* Table  */
+  font-size: 16px;
+}
+h1.title {
+  font-size: 56px;
+}
+h1 { /* Header 1 */
+  font-size: 48px;
+}
+h2 { /* Header 2 */
+    font-size: 36px;
+}
+h3 { /* Header 3 */
+  font-size: 24px;
+}
+code.r{ /* Code block */
+    font-size: 16px;
+}
+</style>
+
+```{r setup, cache = F, echo = F}
+library(knitr)
+knitr::opts_chunk$set(
+  cache = FALSE,
+  echo = TRUE,
+  error = TRUE,
+  warning = FALSE,
+  cache.lazy = FALSE,
+  message = FALSE,
+  fig.width = 12,
+  fig.height = 12
+)
+```
+
+```{r packages, cache = FALSE}
+# === packages ===#
+library(raster)
+library(sf)
+library(here)
+library(ggplot2)
+library(tmap)
+library(patchwork)
+library(measurements)
+library(scam)
+library(stars)
+library(parallel)
+library(future.apply)
+library(dplyr)
+library(tidyverse)
+library(modelsummary)
+library(jsonlite)
+library(data.table)
+library(exactextractr)
+library(future.apply)
+```
+
+```{r preparations, cache = F}
+source(
+  "https://github.com/tmieno2/OnFarmExperiments/blob/master/Functions/prepare.R?raw=TRUE",
+  local = TRUE
+)
+
+#--- github ---#
+source("https://raw.githubusercontent.com/brittanikedge/DIFM/main/Functions.R")
+
+#--- define field-year ---#
+ffy <- "DBAT_1_2021"
+
+#--- read the variable name dictionary ---#
+dictionary <-
+  fromJSON(
+    file.path(
+      here("Data", "CommonData"),
+      "variable_name_dictionary.json"
+    ),
+    flatten = TRUE
+  ) %>%
+  data.table()
+
+#--- define field parameters ---#
+trial_info <- get_trial_parameter(ffy)
+input_trial_data <- trial_info$input_data_trial
+
+#--- add number of paths in a Rx polygon ---#
+#* this is used when filling zero-rate Rx polygons with
+#* manufactured input data points
+
+num_paths <- c(2, 1)
+input_trial_data$num_paths <- num_paths
+
+#---  ---#
+plan(multiprocess, workers = detectCores() - 2)
+```
+
+```{r set-root-dir}
+opts_knit$set(root.dir = here("Data", "Growers", ffy))
+```
+
+```{r map-layout, cache = TRUE}
+tm_layout_to_add <-
+  tm_layout(
+    legend.outside = "TRUE",
+    frame = FALSE,
+    legend.title.size = 2,
+    legend.text.size = 1.5
+  )
+```
+
+
+
+# Process raw as-applied rate data
+
+## Read in datasets
+
+### As-applied data
+
+```{r Reading-as-applied-n-data}
+sd_factor <- 4
+input_type <- "N"
+input_form <- "UAN32"
+w_input_id <- "1"
+input_unit <- "gallons"
+reporting_unit <- "imperial"
+machine_width <- as.numeric("30")
+
+aa_input <-
+  here(
+    "Data/Growers", ffy, "Raw",
+    "21_DBAT_C_ML_FA1.shp"
+  ) %>%
+  #--- read the data ---#
+  st_read() %>%
+  st_set_4326() %>%
+  st_transform_utm() %>%
+  setnames(names(.), tolower(names(.))) %>%
+  mutate(aa_id = 1:nrow(.))
+
+is_aa_input_polygon <- any(st_geometry_type(aa_input) == "POLYGON")
+
+if (is_aa_input_polygon) {
+  aa_input <- close_unclosed(aa_input)
+  #* we will merge this information later
+  aa_input_poly <-
+    aa_input %>%
+    dplyr::select(aa_id, geometry)
+  aa_input$geometry <- st_centroid(aa_input$geometry)
+}
+
+#--- get variable names ---#
+aa_input_names <- names(aa_input)
+```
+
+```{r visialize-n-as-planted-data}
+#--- visualize the points ---#
+tm_shape(aa_input) +
+  tm_dots()
+```
+
+### Medium distance of yield polygons
+
+```{r }
+#--- medium distance of yield polygons ---#
+med_distance_yp <-
+  here("Data/Growers", ffy, "Intermediate/yield_polygons.rds") %>%
+  readRDS() %>%
+  get_med_dist()
+```
+
+## Miscellaneous operations and various checks
+
+### Change variable names
+
+time variable needs to be dealt with separately
+
+```{r }
+if ("time" %in% names(aa_input) & "isotime" %in% names(aa_input)) {
+  aa_input <- dplyr::select(aa_input, -time)
+  time_available <- TRUE
+}
+
+dict_aa_input <- dictionary[type == input_type, ]
+col_list <- dict_aa_input[, column]
+
+aa_input <- make_var_name_consistent(
+  aa_input,
+  dict_aa_input
+)
+
+aa_input <-
+  dplyr::select(
+    aa_input,
+    matches(c(col_list, "aa_id"))
+  )
+```
+
+### Check units
+
+This code assumes that if `distance` is in meter, then other variables (e.g., `width`) are also measured in meter.
+
+```{r }
+no_recorded_dist <- all(is.na(aa_input$distance))
+
+if (!no_recorded_dist) {
+  dist_test <- aa_input %>%
+    dplyr::select(distance) %>%
+    cbind(., st_coordinates(.)) %>%
+    data.table() %>%
+    .[, dif_X := c(0, diff(X))] %>%
+    .[, dif_Y := c(0, diff(Y))] %>%
+    #--- distance in meter ---#
+    .[, distance_r := sqrt(dif_X^2 + dif_Y^2)] %>%
+    #--- dif in difference in meter and recorded distance ---#
+    .[, dif_distance := abs(distance - distance_r)] %>%
+    .[, dif_distance_conv := abs(conv_unit(distance, "ft", "m") - distance_r)]
+
+  # we want to see if the converted units from ft to meter are closer to the distance measured in r
+  if (mean(dist_test$dif_distance_conv, na.rm = TRUE) < mean(dist_test$dif_distance, na.rm = TRUE)) {
+    units <- "imperial"
+  } else {
+    units <- "metric"
+  }
+}
+```
+
+### Transform measurement unit
+
+```{r }
+if (units == "imperial") {
+  aa_input <- aa_input %>%
+    mutate(
+      width = conv_unit(width, "ft", "m"),
+      distance = conv_unit(distance, "ft", "m")
+    )
+} else {
+  aa_input <- aa_input
+}
+```
+
+### Convert input rate unit
+
+If `N`, then base N rate is added as well.
+
+```{r }
+if (input_type == "N") {
+  aa_input <-
+    mutate(
+      aa_input,
+      input_rate = convert_N_unit(
+        form = input_form,
+        unit = input_unit,
+        rate = input_rate,
+        reporting_unit = reporting_unit
+      )
+    )
+} else if (input_type == "S") {
+  #--- seed rate conversion ---#
+  if (any(aa_input$input_rate > 10000)) {
+    #--- convert to K ---#
+    aa_input <- mutate(aa_input, input_rate = input_rate / 1000)
+  }
+}
+```
+
+## Drop points in turns and group points by angle
+
+Definitions:
+
++ dense: if the distance between points in the direction you are moving is very small
+
+
+```{r }
+recover_section_id <- FALSE # this gets updated if the use of points data is necessary
+sectionid_var_available <- !all(is.na(aa_input$sectionid))
+
+
+if (sectionid_var_available) { # if non-na section id variable is in the dataset
+  #--- medium distance between aa_input points ---#
+  med_distance_v <- get_med_dist_sec(aa_input)
+  # === distance between sections ===#
+  med_distance_h <- get_med_dist(aa_input)
+  ratio <- med_distance_v / med_distance_h
+
+  #--- number of sections ---#
+  section_num <- data.table(aa_input)[, .(nobs = .N), by = .(angle)][, median(nobs)]
+
+  if (ratio < 1.01 & ratio > 0.99) {
+    # Note: if the ratio \sim 1, then it means we have only 1 observation per row
+    section_num <- 1
+    med_distance_v <- get_med_dist(aa_input)
+  }
+} else { # if sectionid variable is not present in the data
+
+  # === find the number of the dominant number of the same rates ===#
+  # Note: for non-section-controlled machines the dominant number should be 1
+  dominant_rate_cluster_num <-
+    data.table(aa_input)[, .(num_same_rate = .N), by = input_rate] %>%
+    .[, .(num_num = .N), by = num_same_rate] %>%
+    .[num_num == max(num_num), num_same_rate]
+
+  # === estimate the machined width ===#
+  # if not section controlled, get_med_dist() gets us
+  # the median distance between points.
+  # if section controlled, get_med_dist() gets us
+  # the distance sections. This width times the number of sections has to be similar with the actual machine width.
+
+  estimated_width <- dominant_rate_cluster_num * get_med_dist(aa_input)
+
+  actual_machine_width <- conv_unit(machine_width, "ft", "m")
+
+  if (
+    dominant_rate_cluster_num > 1 &
+      actual_machine_width * 0.95 < estimated_width &
+      actual_machine_width * 1.05 > estimated_width
+  ) {
+    # this is the case where section level data is available, but section id is not available
+    recover_section_id <- TRUE
+    section_num <- 99 # (any positive number greater than 1 will do)
+  } else { # no section control and
+
+    #--- number of sections ---#
+    section_num <- 1
+  }
+}
+```
+
+### Group points by changes in angle
+
+```{r }
+
+if (recover_section_id) { # if section id is missing even though the data is observed at the section level
+
+  aa_input_grouped <- group_and_recover_section_id(aa_input) %>%
+    st_as_sf()
+
+  med_distance_v <- get_med_dist_sec(aa_input_grouped)
+} else { # no section control of section control with section identifier
+  if (section_num != 1) {
+    #--- if section-controlled and more than one section observations at a time ---#
+    aa_input_grouped <-
+      group_points_sc(
+        aa_input,
+        by_var = "sectionid",
+        angle_threshold = 30
+      ) %>%
+      #--- remove observations with no group assigned ---#
+      mutate(
+        new_group = paste(group, sectionid, sep = "_")
+      ) %>%
+      arrange(id)
+    #--- medium distance between aa_input points ---#
+    med_distance_v <- get_med_dist_sec(aa_input_grouped)
+  } else {
+    #--- if only one observation at a time ---#
+    aa_input_grouped <-
+      group_points_sc(
+        aa_input,
+        by_var = NA,
+        angle_threshold = 30
+      ) %>%
+      #--- remove observations with no group assigned ---#
+      mutate(new_group = group)
+
+    #--- medium distance between aa_input points ---#
+    med_distance_v <- get_med_dist(aa_input_grouped)
+  }
+}
+```
+
+Red points are those that are recognized for making a sharp turn from their respective previous points.
+
+```{r }
+tm_shape(aa_input_grouped) +
+  tm_dots(col = "blue") +
+  tm_shape(filter(aa_input_grouped, change_group == TRUE)) +
+  tm_dots(col = "red", size = 0.1) +
+  tm_layout_to_add
+```
+
+## Check if points are missing for the area with target rate of zero
+
+ 
+```{r }
+w_Rx_data <-
+  input_trial_data %>%
+  filter(input_id == w_input_id) %>%
+  pull(Rx_data)
+
+if (w_Rx_data != "none") { # if Rx data exists
+
+  #* Check if there are polygons with targer rate of zero
+  Rx_data <-
+    input_trial_data %>%
+    filter(input_id == w_input_id) %>%
+    pull(Rx_data) %>%
+    here("Data/Growers", ffy, "Raw", .) %>%
+    st_read() %>%
+    setnames(input_form, "tgt_input") %>%
+    st_transform(st_crs(aa_input_grouped)) %>%
+    mutate(rx_id := 1:n()) %>%
+    mutate(area = st_area(.) %>% as.numeric())
+
+  #* Check which Rx polygons do not have regular number of points
+  point_density <-
+    st_intersection(Rx_data, aa_input_grouped) %>%
+    data.table() %>%
+    .[, .(density = .N / mean(area)), by = rx_id] %>%
+    .[order(rx_id), ]
+
+  #* Rx polygons with no points
+  no_point_rx_id <- Rx_data$rx_id[!(Rx_data$rx_id %in% point_density$rx_id)]
+
+  #* Rx polygons with small number of points
+  scarce_rx_id <-
+    point_density %>%
+    .[density < median(density) * 0.3, ] %>%
+    .[, rx_id]
+
+  #* Rx polygons ids where points will be filled in
+  zero_rx_id <-
+    filter(Rx_data, rx_id %in% c(scarce_rx_id, no_point_rx_id)) %>%
+    filter(tgt_input == 0) %>%
+    pull(rx_id)
+} else {
+  zero_rx_id <- NULL
+}
+
+if (length(zero_rx_id) != 0) {
+  #* if points are missing in the zero-rate polygons
+  zero_tgt_polygons <-
+    filter(Rx_data, rx_id %in% zero_rx_id) %>%
+    st_buffer(actual_machine_width / 2)
+
+  #* which groups of points are intersecting the zero-rate Rx polygons?
+  rx_group_ls <-
+    st_intersection(aa_input_grouped, zero_tgt_polygons) %>%
+    data.table() %>%
+    .[, .(rx_id, group)] %>%
+    unique(by = c("rx_id", "group")) %>%
+    setnames("group", "w_group")
+
+  # tm_shape(aa_input_grouped) +
+  #   tm_symbols(size = 0.05) +
+  # tm_shape(points_filling$int_seq_rx[[6]]) +
+  #   tm_symbols(col = "red", size = 0.05) +
+  # tm_shape(points_filling$geometry[6]) +
+  #   tm_borders()
+
+  #* Make sequence of points inside the zero-rate Rx polygons
+  field_bbox <- st_bbox(aa_input_grouped)
+  candidate_points <-
+    rx_group_ls %>%
+    rowwise() %>%
+    left_join(., Rx_data, by = "rx_id") %>%
+    mutate(point_data = list(
+      filter(aa_input_grouped, group == w_group) %>%
+        data.table()
+    )) %>%
+    mutate(origin = list(
+      point_data %>%
+        arrange(original_order_id) %>%
+        slice(n()) %>%
+        .$geometry
+    )) %>%
+    #* vector of direction (5 times more sparse)
+    mutate(dir_vect = list(
+      point_data[, .(median(diff(X)), median(diff(Y)))] %>%
+        unlist()
+    )) %>%
+    mutate(dist_between_points = list(
+      sum(dir_vect^2) %>% sqrt()
+    )) %>%
+    mutate(length = list(
+      sqrt((field_bbox["xmax"] - field_bbox["xmin"])^2 + (field_bbox["ymax"] - field_bbox["ymin"])^2)
+    )) %>%
+    mutate(seq_points = list(
+      make_seq_points(aa_input_grouped, origin, dir_vect, length)
+    )) %>%
+    #* manufactured data points that are inside the zero-rate Rx polygon
+    mutate(int_seq_rx = list(
+      st_intersection(geometry, seq_points) %>%
+        st_as_sf() %>%
+        data.table() %>%
+        .[, m_point_id := 1:.N] %>%
+        st_as_sf()
+    )) %>%
+    mutate(int_nums = nrow(int_seq_rx)) %>%
+    filter(int_nums > 0) %>%
+    data.table()
+
+  # # /*+++++++++++++++++++++++++++++++++++
+  # #' ## how many paths in a single Rx polygon?
+  # # /*+++++++++++++++++++++++++++++++++++
+  # num_paths <-
+  #   st_buffer(aa_input_grouped, dist = actual_machine_width / 2) %>%
+  #   st_intersection(., filter(Rx_data, tgt_input != 0)) %>%
+  #   mutate(area_int = st_area(.) %>% as.numeric()) %>%
+  #   data.table() %>%
+  #   .[, .(area_tot = sum(area_int)), by = rx_id] %>%
+  #   data.table(Rx_data)[, .(rx_id, area)][., on = "rx_id"] %>%
+  #   .[, ratio := area_tot / area] %>%
+  #   .[, ifelse(median(ratio) > 1, 2, 1)]
+
+  num_paths_per_Rx_plot <- input_trial_data[input_id == w_input_id, num_paths]
+
+  # /*+++++++++++++++++++++++++++++++++++
+  #' ## cluster w_group
+  # /*+++++++++++++++++++++++++++++++++++
+  group_cluster <-
+    dplyr::select(candidate_points, rx_id, w_group) %>%
+    nest_by(rx_id) %>%
+    mutate(data = list(
+      mutate(data, cluster = kmeans(w_group, num_paths_per_Rx_plot)$cluster)
+    )) %>%
+    unnest()
+
+  points_filling <-
+    candidate_points %>%
+    left_join(., group_cluster, by = c("rx_id", "w_group")) %>%
+    data.table() %>%
+    .[, .SD[which.max(int_nums)], by = .(rx_id, cluster)] %>%
+    rowwise() %>%
+    mutate(points_to_remove = list(
+      st_intersection(aa_input_grouped, geometry) %>%
+        st_buffer(dist_between_points / 2) %>%
+        #* which of the manufactured data points are close to the existing data points
+        st_intersection(int_seq_rx, .) %>%
+        data.table() %>%
+        .[, unique(m_point_id)]
+    )) %>%
+    mutate(points_to_add = list(
+      filter(int_seq_rx, !(m_point_id %in% points_to_remove)) %>%
+        cbind(., st_coordinates(.)) %>%
+        data.table()
+    )) %>%
+    mutate(num_points_to_add = nrow(points_to_add)) %>%
+    filter(num_points_to_add != 0) %>%
+    mutate(points_to_add = list(
+      mutate(points_to_add, group = paste0("m_rx_", rx_id, "_cl_", cluster), new_group = paste0("m_rx_", rx_id, "_cl_", cluster))
+    )) %>%
+    pull(points_to_add) %>%
+    rbindlist() %>%
+    .[, input_rate := 0] %>%
+    setnames("x", "geometry") %>%
+    .[, width := median(aa_input_grouped$width)]
+
+  aa_input_grouped <-
+    rbind(data.table(aa_input_grouped), points_filling, fill = TRUE) %>%
+    st_as_sf() %>%
+    mutate(aa_id = 1:n())
+
+  #* Visualization (Rx polygons that are missing points inside)
+  tm_shape(aa_input_grouped) +
+    tm_symbols(size = 0.02) +
+    tm_shape(zero_tgt_polygons) +
+    tm_borders(col = "red") +
+    tm_shape(Rx_data) +
+    tm_text(text = "rx_id", col = "blue")
+
+  #* New (red) and existing (bllue) poitns
+  tm_shape(aa_input_grouped) +
+    tm_symbols(col = "blue", size = 0.1) +
+    tm_shape(st_as_sf(points_filling)) +
+    tm_symbols(col = "red", size = 0.1)
+}
+
+
+# ggplot() +
+#   geom_sf(data = zero_tgt_polygons) +
+#   # geom_sf(data = origin, col = "red") +
+#   geom_sf(
+#     data = st_as_sf(points_filling$point_data[[2]]),
+#     col = "blue"
+#   ) +
+#   geom_sf(data = points_seq)
+
+g_raw_input <-
+  ggplot() +
+  geom_sf(
+    data = aa_input,
+    size = 0.3
+  ) +
+  theme_void()
+
+g_filled <-
+  ggplot() +
+  geom_sf(
+    data = aa_input,
+    size = 0.3
+  ) +
+  geom_sf(
+    data = st_as_sf(points_filling),
+    size = 0.3,
+    color = "red"
+  ) +
+  theme_void()
+
+g_input_fill <- g_raw_input | g_filled
+
+ggsave(here("Misc/g_raw_input.png"), g_raw_input, width = 7, height = 4, dpi = 600)
+ggsave(here("Misc/g_filled.png"), g_filled, width = 7, height = 4, dpi = 600)
+ggsave(here("Misc/g_input_fill.png"), g_input_fill, width = 7, height = 4, dpi = 600)
+```
+
+## Intersect with the Trial Design and Flag Outliers by Treatment Block
+
+### Import the trial design and visualize
+
+**Read the trial design shape file**
+
+```{r }
+trd_polygons <-
+  here(
+    "Data/Growers", ffy, "TrialDesign",
+    paste0(trial_info$tr_design_data, ".shp")
+  ) %>%
+  st_read() %>%
+  st_transform(st_crs(aa_input_grouped)) %>%
+  mutate(trd_id = 1:nrow(.))
+```
+
+**Visualization**
+```{r }
+# === vis ===#
+tm_shape(trd_polygons) +
+  tm_polygons(col = "Trt")
+```
+
+### Flag yield outliers by treatment block
+
+This process uses a different criteria from that used for yield data.
+
++ Find the median of `input_rate` by treatment block
++ Flag observations as outliers if thier values deviate more than +- 10% from the median
+
+```{r }
+aa_input_trd <-
+  aa_input_grouped %>%
+  dplyr::select(aa_id, input_rate, group, geometry) %>%
+  #* identify which yield point falls in which treatment block
+  st_join(., trd_polygons) %>%
+  #* order by yield id
+  arrange(aa_id) %>%
+  data.table() %>%
+  #* flag outliers by treatment block
+  nest_by(trd_id, group, Trt) %>%
+  mutate(
+    median_input_rate =
+      median(data$input_rate, na.rm = TRUE)
+  ) %>%
+  mutate(data = list(
+    if (Trt == "N_ramp" & !is.na(Trt)) {
+      mutate(data, ol_input_rate = ifelse(
+        input_rate > median_input_rate * (1.1) | input_rate < median_input_rate * (0.9),
+        1, 0
+      ))
+    } else {
+      flag_bad_points(
+        data = data,
+        var_name = "input_rate",
+        sd_factor = sd_factor,
+        upper = TRUE
+      )
+    }
+  )) %>%
+  unnest() %>%
+  data.table() %>%
+  .[, .(aa_id, ol_input_rate)]
+
+#* join with aa_input_grouped
+aa_input_grouped <-
+  left_join(aa_input_grouped, aa_input_trd, by = "aa_id")
+```
+
+**Show the points that are flagged as outliers**
+
+1 indicates outliers.
+
+```{r }
+tm_shape(aa_input_grouped) +
+  tm_dots(col = "ol_input_rate", style = "cat") +
+  tm_layout_to_add
+```
+
+
+
+## Correct width if not right
+
+```{r }
+
+# /*----------------------------------*/
+#' ## Width correction
+# /*----------------------------------*/
+if (section_num != 1) {
+
+  # Note: this works as there are many observations at a single application time
+  med_distance_h <- get_med_dist(aa_input_grouped)
+
+  aa_input_grouped <- mutate(aa_input_grouped, width = med_distance_h)
+} else {
+  # if only one observation at a timestamp, use the reported width from the machine
+
+  if (all(is.na(aa_input_grouped$width))) {
+    aa_input_grouped <- mutate(aa_input_grouped, width = actual_machine_width)
+  }
+}
+```
+
+## Vertically reduce points if dense (parallel to the direction the planter is moving)
+
+When the points are too close to each other, creating polygons can fail because polygon creation depends on the angle from one point to the next.
+
+```{r }
+is_dense <- (med_distance_v * 2) < med_distance_yp
+
+if (is_dense) {
+  num_obs_rg <- ceiling(2 / (med_distance_v))
+
+  aa_input_reduced_v <-
+    reduce_points_v(
+      data_sf = aa_input_grouped,
+      nobs_per_group = num_obs_rg,
+      var_interest = "input_rate",
+      ol_var_name = "ol_input_rate",
+      by_var = "new_group"
+    ) %>%
+    # === remove observations that has only observation per new_group ===#
+    .[, .SD[.N != 1, ], by = new_group]
+} else {
+
+  # === Do not reduce ===#
+  aa_input_reduced_v <-
+    data.table(aa_input_grouped) %>%
+    # === remove observations that has only observation per new_group ===#
+    .[, .SD[.N != 1, ], by = new_group]
+}
+```
+
+## Create polygons
+
+```{r }
+#--- prepare parallel computation ---#
+plan(multiprocess, workers = detectCores() - 2)
+
+#--- create polygons ---#
+if (.Platform$OS.type == "unix") {
+  all_polygons <-
+    mclapply(
+      #--- list of groups to loop over ---#
+      aa_input_reduced_v$new_group %>% unique(),
+      #--- make polygons by group ---#
+      function(x) {
+        make_polygons(
+          filter(aa_input_reduced_v, new_group == x)
+        )
+      },
+      mc.cores = detectCores() - 2
+    ) %>%
+    do.call("c", .) %>%
+    st_as_sfc() %>%
+    st_make_valid()
+} else {
+  all_polygons <-
+    lapply(
+      #--- list of groups to loop over ---#
+      aa_input_reduced_v$new_group %>% unique(),
+      #--- make polygons by group ---#
+      function(x) {
+        make_polygons(
+          filter(aa_input_reduced_v, new_group == x)
+        )
+      }
+    ) %>%
+    do.call("c", .) %>%
+    st_as_sfc() %>%
+    st_make_valid()
+}
+
+# filter(aa_input_grouped, new_group == "m_18") %>%
+#   st_as_sf() %>%
+#   ggplot(data = .) +
+#   geom_sf()
+
+#--- combine with the data ---#
+aa_input_sf <-
+  aa_input_reduced_v %>%
+  mutate(geometry = all_polygons) %>%
+  st_as_sf() %>%
+  st_set_crs(st_crs(aa_input)) %>%
+  #--- get rid of transition polygons by area ---#
+  mutate(area = as.numeric(st_area(.))) %>%
+  # filter(area <= median(area) * 5) %>%
+  mutate(aa_input_id = 1:nrow(.)) %>%
+  filter(!st_is_empty(.)) %>%
+  dplyr::select(aa_input_id, input_rate, ol_input_rate)
+```
+
+
+# This is where the figure is created!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+```{r }
+input_data <- filter(aa_input_sf, ol_input_rate == 0, input_rate < 100)
+
+g_input_poly <-
+  ggplot(input_data) +
+  geom_sf(aes(fill = input_rate * 1.12085)) +
+  scale_fill_distiller(name = "Nitrogen Rate (kg/ha)", palette = "YlOrBr") +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.key.width = unit(1, "cm")
+  )
+
+ggsave(here("Misc/g_input_poly.png"), g_input_poly, height = 4, width = 7, dpi = 600)
+```
+

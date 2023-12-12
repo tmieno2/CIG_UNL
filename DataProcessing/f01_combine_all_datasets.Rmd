@@ -1,0 +1,155 @@
+# Preparation
+
+## Read in yield datasets
+
+```{r }
+#--- yield ---#
+yield_sf <-
+  here("Data/Growers", ffy, "Intermediate/yield_input_data.rds") %>%
+  readRDS()
+```
+
+```{r}
+yield_point <-
+  readRDS(
+    here(
+      "Data/Growers",
+      ffy,
+      "Intermediate/yield_point.rds"
+    )
+  ) %>%
+  dplyr::select(yield_id)
+```
+
+# Overlay and merge the datasets
+
+## Topography
+
+```{r , results = "hide"}
+topo_sr <- terra::rast(here("Data", "Growers", ffy, "Intermediate/topography.tif"))
+
+topo_values <-
+  topo_sr %>%
+  exact_extract(., st_transform(yield_sf, st_crs(.))) %>%
+  rbindlist(idcol = "rowid") %>%
+  .[,
+    lapply(.SD, weighted.mean, w = coverage_fraction),
+    by = rowid,
+    .SDcols = paste0("layer.", 1:length(topo_stars))
+  ] %>%
+  setnames(names(.)[-1], names(topo_stars))
+
+yield_sf <-
+  yield_sf %>%
+  mutate(rowid := 1:nrow(.)) %>%
+  left_join(., topo_values, by = "rowid") %>%
+  dplyr::select(-rowid)
+```
+
+## SSURGO
+
+```{r , results = "hide"}
+ssurgo_sf <-
+  here("Data/Growers", ffy, "Intermediate/ssurgo.rds") %>%
+  readRDS() %>%
+  st_transform(st_crs(yield_sf))
+
+ssurgo_values <-
+  dplyr::select(yield_sf, yield_id) %>%
+  st_intersection(., ssurgo_sf) %>%
+  mutate(area = as.numeric(st_area(.))) %>%
+  data.table() %>%
+  .[, area_pct := area / sum(area), by = yield_id] %>%
+  .[,
+    lapply(.SD, weighted.mean, w = area_pct),
+    by = yield_id,
+    .SDcols = c("sandtotal_r", "silttotal_r", "claytotal_r", "awc_r", "om_r", "dbovendry_r")
+  ]
+
+yield_sf <- left_join(yield_sf, ssurgo_values, by = "yield_id")
+```
+
+## Rx
+
+```{r eval = F}
+if (!is.null(nrow(trial_info$rx_data))) {
+  cm_rx_data <-
+    trial_info$rx_data %>%
+    rowwise() %>%
+    mutate(cm_rx = list(
+      st_read(here("Data/Growers", ffy, "Raw", file))
+    )) %>%
+    mutate(cm_rx = list(
+      if (var_name_prefix != "none") {
+        cm_rx %>%
+          rename_at(vars(-one_of("geometry")), ~ paste0(var_name_prefix, "_", .))
+      }
+    )) %>%
+    mutate(yield_cm_rx = list(
+      st_join(yield_point, st_transform(cm_rx, st_crs(yield_point))) %>%
+        data.table() %>%
+        dplyr::select(-geometry)
+    )) %>%
+    pull(yield_cm_rx) %>%
+    reduce(left_join, by = "yield_id")
+
+  yield_sf <- left_join(yield_sf, cm_rx_data, by = "yield_id")
+}
+```
+
+## Ex data
+
+```{r }
+
+if (!is.null(nrow(trial_info$ex_data))) {
+  ex_data <-
+    trial_info$ex_data %>%
+    rowwise() %>%
+    mutate(data = list(
+      st_read(here("Data/Growers", ffy, "Raw", file))
+    )) %>%
+    mutate(data_keep = list(
+      data[, vars] %>%
+        st_transform(st_crs(yield_point))
+    )) %>%
+    mutate(data_keep = list(
+      if (var_name_prefix != "none") {
+        data_keep %>%
+          rename_at(vars(-one_of("geometry")), ~ paste0(var_name_prefix, "_", .))
+      }
+    )) %>%
+    mutate(geom_type = list(
+      st_geometry_type(data_keep) %>% unique()
+    )) %>%
+    mutate(matched_data = list(
+      if (geom_type %in% c("POINT", "MULTIPOINT")) {
+        st_join(yield_point, data_keep, join = st_nearest_feature) %>%
+          st_drop_geometry()
+      } else if (geom_type %in% c("POLYGON", "MULTIPOLYGON")) {
+        #* This operation picks the dominant intersection by yield id
+        yield_sf %>%
+          dplyr::select(yield_id, geometry) %>%
+          st_intersection(., data_keep) %>%
+          mutate(int_area = as.numeric(st_area(.))) %>%
+          arrange(yield_id, int_area) %>%
+          group_by(yield_id) %>%
+          slice(1) %>%
+          st_drop_geometry() %>%
+          data.table()
+      }
+    )) %>%
+    pull(matched_data) %>%
+    reduce(left_join, by = "yield_id")
+
+  yield_sf <- left_join(yield_sf, ex_data, by = "yield_id")
+}
+```
+
+## Save
+
+```{r }
+saveRDS(yield_sf, here("Data", "Growers", ffy, "Analysis-Ready/analysis_data.rds"))
+```
+
+
+<!-- testing, testing -->

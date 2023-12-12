@@ -1,0 +1,48 @@
+# SSURGO data
+
+## Download SSURGO data for the area of interest
+
+```{r extra-package, cache = F}
+library(soilDB)
+```
+
+```{r }
+boundary_sf <-
+  here(
+    "Data", "Growers", ffy, "TrialDesign",
+    paste0(get_trial_parameter(ffy)$tr_design_data, ".shp")
+  ) %>%
+  st_read() %>%
+  st_set_4326() %>%
+  st_transform_utm() %>%
+  st_bbox() %>%
+  st_as_sfc() %>%
+  st_as_sf()
+
+boundary_sp <- as(boundary_sf, "Spatial")
+
+#--- download SSURGO ---#
+vars <- c("sandtotal_r", "silttotal_r", "claytotal_r", "awc_r", "om_r", "dbovendry_r")
+ssurgo_data <- get_ssurgo_props(boundary_sp, vars = vars)
+```
+
+## Visualize
+
+```{r }
+lapply(
+  vars,
+  function(x) {
+    ssurgo_data %>%
+      setnames(x, "var") %>%
+      ggplot(data = .) +
+      geom_sf(aes(fill = var)) +
+      scale_fill_gradient(name = x)
+  }
+)
+```
+
+## Save
+
+```{r }
+saveRDS(ssurgo_data, here("Data", "Growers", ffy, "Intermediate/ssurgo.rds"))
+```

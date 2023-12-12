@@ -1,0 +1,72 @@
+---
+title: 
+---
+
+# Preparation
+
+Load packages and source functions"
+
+```{r}
+source(here::here("Functions/prepare.R"))
+```
+
+Specify the farmer_field_year to work on.
+
+```{r}
+ffy <- "ffy_here"
+```
+
+# Non-experiment Data
+
+```{r}
+get_ne_data(
+  ffy = ffy,
+  rerun = TRUE,
+  locally_run = FALSE
+)
+```
+
+# Experiment data
+
+## Process yield data
+```{r}
+process_yield(
+  ffy = ffy,
+  ol_yield_sd_factor = 4
+)
+```
+
+## Process input data
+
+```{r}
+process_input(
+  ffy = ffy,
+  ol_sd_factor = 4,
+  #* === define how many as-applied paths you have in a design plot ===*#
+  #* this one is used only when there are missing data points due to the application of zero rates
+  #* do not forget ""
+  num_paths = "c(2,2)"
+)
+```
+
+## Merge yield and input data
+
+<span style = "color: red;"> Warning: </span> the number of elements in max_dev_ls has to match with the number of inputs in trial_info.
+
+```{r}
+merge_yield_input(
+  ffy = ffy,
+  overlap_acceptance_pct = 0.01,
+  max_dev_ls = "c(10, 10)",
+  ignore_overlap_threshold = 0.05 # default 0.05
+)
+```
+
+## Put all datasets together
+
+```{r}
+f_process_make_report(ffy = ffy)
+```
+
+
+

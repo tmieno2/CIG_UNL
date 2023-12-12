@@ -1,0 +1,481 @@
+# Combine yield and input datasets
+
+## Preparation
+
+### Define some parameters
+
+```{r }
+overlap_acceptance_pct <- overlap_acceptance_pct_here
+max_dev_ls <- max_dev_here
+ignore_overlap_threshold <- ignore_overlap_threshold_here
+```
+
+### Read datasets
+
+**Yield**
+
+```{r }
+#--- yield ---#
+yield_polygons <- here("Data/Growers", ffy, "Intermediate/yield_polygons.rds") %>%
+  readRDS() %>%
+  mutate(yield_area = as.numeric(st_area(.)))
+
+# === vis ===#
+tm_shape(filter(yield_polygons, drop_as_outliers == 0)) +
+  tm_fill(col = "yield_vol", style = "order")
+```
+
+**Inputs and their Rx (if exist)**
+
+```{r }
+if (length(max_dev_ls) != nrow(input_trial_data)) {
+  print("Warning: the number of elements in max_dev_ls does not match with the number of inputs in input_trial_data!")
+}
+```
+
+```{r }
+# input_polygons$rx_polygons
+
+input_polygons <-
+  input_trial_data %>%
+  mutate(max_dev_allowed = max_dev_ls) %>%
+  rowwise() %>%
+  mutate(
+    input_file_name = here(
+      "Data/Growers", ffy, "Intermediate",
+      paste0("aa-", input_type, "-", form, "-", input_id, ".rds")
+    )
+  ) %>%
+  # === input ===#
+  mutate(input_polygons = list(readRDS(input_file_name))) %>%
+  #--- add date ---#
+  mutate(input_polygons = list(
+    mutate(input_polygons, date = date)
+  )) %>%
+  # === rx ===#
+  mutate(rx_polygons = list(
+    if (Rx_data != "none") {
+      st_read(here("Data/Growers", ffy, "Raw", paste0(Rx_data, ".shp"))) %>%
+        mutate(rx_id = 1:nrow(.))
+    } else {
+      NULL
+    }
+  ))
+```
+
+### Input polygons
+
+```{r }
+
+input_polygons %>%
+  mutate(
+    tm_map = list(
+      tm_shape(input_polygons) +
+        tm_fill(
+          col = "input_rate",
+          title = paste0(input_type, "-", form)
+        ) +
+        tm_layout_to_add
+    )
+  ) %>%
+  .$tm_map
+```
+
+### Rx polygons
+
+```{r eval = F}
+input_polygons %>%
+  filter(Rx_data != "none") %>%
+  mutate(
+    tm_map = list(
+      tm_shape(rx_polygons) +
+        tm_polygons(
+          col = form,
+          title = paste0(input_type, "-", form)
+        ) +
+        tm_layout_to_add
+    )
+  ) %>%
+  .$tm_map
+```
+
+**Base input rate**
+
+```{r }
+n_base <- trial_info$n_base_rate
+```
+
+## Data alignment checks
+
+Visually check whether yield data points are aligned well with as-applied input data points.
+
+### Yield and inputs
+
+```{r }
+tm_alignment <-
+  input_polygons %>%
+  mutate(
+    tm_map = list(
+      tm_shape(input_polygons) +
+        tm_borders(lwd = 0.2) +
+        tm_shape(st_centroid(yield_polygons)) +
+        tm_dots(col = "blue", title = "Yield Points")
+    )
+  )
+
+tm_alignment$tm_map
+```
+
+## Flag unreliable polygons
+
+### Check the overlap and find area-weighted input rates
+
+```{r }
+
+# input_pct$yield_input_int
+# input_pct$input_pct_data[[1]][, wm_input_rate_ignore_small]
+
+input_pct <-
+  input_polygons %>%
+  # === intersect yield and input polygons to check overlaps ===#
+  # Every possible cropping intersetcions of yield and nitrogen polygons are made
+  mutate(yield_input_int = list(
+    st_intersection(
+      dplyr::select(yield_polygons, yield_id, yield_area),
+      dplyr::select(input_polygons, input_rate, ol_input_rate)
+    ) %>%
+      # === percentage of overlap relative to the are of a yield polygon ===#
+      mutate(sub_pct = as.numeric(st_area(.)) / yield_area) %>%
+      data.table() %>%
+      #* === flag overlapping input rate observations if below the threshold ===*#
+      # flag the interesections that are very small and potentially want to ignore in calculating N for each yield polygon
+      .[, ignorable_overlap := fifelse(sub_pct < ignore_overlap_threshold, TRUE, FALSE)]
+  )) %>%
+  mutate(input_pct_data = list(
+    copy(yield_input_int) %>%
+      #--- total sub_pct by yield polygon ---#
+      .[, tot_sub_pct := sum(sub_pct), by = yield_id] %>%
+      #--- calculate sub_pct-weighted MEAN of applied rate ---#
+      #* NOT divided by tot_sub_pct
+      .[, wm_input_rate := sum(sub_pct * input_rate), by = yield_id] %>%
+      #* if total area coverage is less than 5 %, then set the rate to be 0
+      .[tot_sub_pct < 0.05, wm_input_rate := 0] %>%
+      #--- weighted deviation from the mean ---#
+      .[, dev_input_rate := sum(abs(sub_pct * (input_rate - wm_input_rate) / tot_sub_pct)), by = yield_id] %>%
+      #--- calculate sub_pct-weighted MEAN of outlier flag ---#
+      .[, ol := sum(sub_pct * ol_input_rate) / tot_sub_pct, by = yield_id] %>%
+      #--- indicate whether  ---#
+      .[ignorable_overlap != TRUE, wm_input_rate_ignore_small := sum(sub_pct * input_rate), by = yield_id] %>%
+      #--- order by yield_id ---#
+      .[order(yield_id), ] %>%
+      .[, .(
+        yield_id,
+        tot_sub_pct,
+        wm_input_rate,
+        wm_input_rate_ignore_small,
+        dev_input_rate,
+        date,
+        ol
+      )] %>%
+      setnames(
+        c("wm_input_rate", "wm_input_rate_ignore_small"),
+        c("input_rate", "input_rate_ignore_small")
+      ) %>%
+      unique(by = "yield_id")
+  )) %>%
+  dplyr::select(input_type, form, var_name_prefix, yield_input_int, input_pct_data, max_dev_allowed) %>%
+  mutate(
+    # === visualize overlap ===#
+    gg_overlap = list(
+      ggplot(input_pct_data) +
+        geom_histogram(aes(x = tot_sub_pct)) +
+        ggtitle(
+          paste(
+            "Histogram of the percentage of yield polygons \n overlapping with",
+            input_type,
+            "polygons"
+          )
+        )
+    ),
+    # === visualize mix of rates ===#
+    gg_dev = list(
+      ggplot(input_pct_data) +
+        geom_histogram(aes(x = dev_input_rate)) +
+        ggtitle(
+          paste(
+            "Histogram of the deviation of ",
+            input_type,
+            "\n to its mean by yield_id"
+          )
+        )
+    )
+  )
+```
+
+```{r }
+input_pct$gg_overlap
+
+input_pct$gg_dev
+```
+
+### An example polygon with a problem
+
+```{r }
+temp_yield_id <- input_pct$input_pct_data[[1]][tot_sub_pct > 2, yield_id][1]
+
+overlapping_input <- input_pct$yield_input_int[[1]][yield_id == temp_yield_id]
+
+temp_yield_poly <- filter(yield_polygons, yield_id == temp_yield_id)
+
+ggplot() +
+  geom_sf(data = st_as_sf(overlapping_input), aes(fill = factor(input_rate)), alpha = 0.5) +
+  geom_sf(data = temp_yield_poly, color = "red", fill = NA, size = 1)
+```
+
+### Flag unreliable observations
+
+```{r }
+# === yield data after removing unreliable inputs ===#
+yield_input_data_pre <-
+  input_pct %>%
+  dplyr::select(input_type, var_name_prefix, form, input_pct_data, max_dev_allowed) %>%
+  mutate(input_pct_data_pre = list(
+    data.table::copy(input_pct_data) %>%
+      # === 0 means within the threshold ===#
+      #* if tot_sub_pct < 0.05, that can be considered GPS error
+      .[, over_lap_test := fifelse(
+        (tot_sub_pct > (1 - overlap_acceptance_pct) &
+          tot_sub_pct < (1 + overlap_acceptance_pct)) |
+          tot_sub_pct < 0.05,
+        0,
+        1
+      )] %>%
+      # === 0 means okay ===#
+      .[, deviation_test := fifelse(dev_input_rate < max_dev_allowed, 0, 1)] %>%
+      .[, .(yield_id, input_rate, input_rate_ignore_small, ol, over_lap_test, deviation_test, date)]
+  )) %>%
+  mutate(input_pct_data_out = list(
+    copy(input_pct_data_pre) %>%
+      setnames(
+        "date",
+        paste0(tolower(input_type), "_", form, "_date")
+      ) %>%
+      setnames(
+        "input_rate",
+        paste0(tolower(input_type), "_rate", "_", form)
+      ) %>%
+      setnames(
+        "input_rate_ignore_small",
+        paste0(tolower(input_type), "_rate", "_", form, "ignore_small")
+      ) %>%
+      setnames(
+        "ol",
+        paste0("ol_", tolower(input_type), "_", form)
+      ) %>%
+      setnames(
+        c("over_lap_test", "deviation_test"),
+        c(
+          paste0(tolower(input_type), "_overlap", form),
+          paste0(tolower(input_type), "_deviation", form)
+        )
+      ) %>%
+      rename_at(vars(-one_of("yield_id")), ~ paste0(ifelse(is.na(var_name_prefix), "", paste0(var_name_prefix, "_")), .))
+  ))
+```
+
+
+## Merge with Commercial Rx
+
+This code assumes that the prescription rate variable is named the same as the `form` in the `metadata.json` file.
+
+```{r eval = F}
+cm_rx_data <-
+  trial_info$rx_data %>%
+  rowwise() %>%
+  mutate(cm_rx = list(
+    st_read(here("Data/Growers", ffy, "Raw", file))
+  )) %>%
+  mutate(yield_cm_rx = list(
+    st_intersection(yield_point, st_transform(cm_rx, st_crs(yield_point))) %>%
+      data.table() %>%
+      .[, c("yield_id", form), with = FALSE] %>%
+      setnames(form, paste0(form, "_", model))
+  )) %>%
+  pull(yield_cm_rx) %>%
+  reduce(left_join, by = "yield_id")
+```
+
+## Prepare datasets for analysis and check
+
+### Data for analysis
+
+```{r }
+yield_input_data <-
+  yield_input_data_pre %>%
+  pull(input_pct_data_out) %>%
+  reduce(full_join, by = "yield_id") %>%
+  inner_join(yield_polygons, ., by = "yield_id") %>%
+  # === add base n-rate column ===#
+  mutate(n_base_total = trial_info$n_base_data$n_total) %>%
+  cbind(., trial_info$n_base_data$n_indiv)
+```
+
+### Detailed data for inspection
+
+```{r }
+yield_trd <-
+  readRDS(
+    here(
+      "Data/Growers",
+      ffy,
+      "Intermediate/yield_trd.rds"
+    )
+  )
+
+dt_trd_int <-
+  tibble(
+    type = "trial-design",
+    int_info = list(yield_trd)
+  )
+
+dt_input_int <-
+  input_pct %>%
+  mutate(type = paste0(input_type, "-", form)) %>%
+  dplyr::select(type, yield_input_int) %>%
+  rename(int_info = yield_input_int)
+
+detailed_int_data <-
+  rbind(dt_trd_int, dt_input_int) %>%
+  # === add base n-rate column ===#
+  mutate(n_base = n_base)
+```
+
+## Visualization
+
+```{r }
+viz <-
+  yield_input_data_pre %>%
+  mutate(input_data_viz = list(
+    inner_join(yield_polygons, input_pct_data_pre, by = "yield_id") %>%
+      st_as_sf()
+  )) %>%
+  dplyr::select(input_type, form, input_data_viz) %>%
+  mutate(viz_overlap = list(
+    ggplot(data = input_data_viz) +
+      geom_sf(aes(fill = factor(over_lap_test)), size = 0.4) +
+      scale_fill_discrete(name = form)
+  )) %>%
+  mutate(viz_deviation = list(
+    ggplot(data = input_data_viz) +
+      geom_sf(aes(fill = factor(deviation_test)), size = 0.4) +
+      scale_fill_discrete(name = form)
+  ))
+```
+
+**Overlap (0 means passing the overlap test)**
+
+```{r }
+viz$viz_overlap
+```
+
+**Deviation (0 means passing the deviation test)**
+
+```{r }
+viz$viz_deviation
+```
+
+## Save
+
+```{r }
+saveRDS(yield_input_data, file = here("Data", "Growers", ffy, "Intermediate/yield_input_data.rds"))
+
+# yield_input_data <- readRDS(file = here("Data", "Growers", ffy, "Intermediate/yield_input_data.rds"))
+
+saveRDS(detailed_int_data, file = here("Data", "Growers", ffy, "DataProcessingReport/detailed_intersection_info.rds"))
+```
+
+# Visual Diagnostics
+
+```{r }
+trd_polygons <-
+  here(
+    "Data/Growers", ffy, "TrialDesign",
+    paste0(trial_info$tr_design_data, ".shp")
+  ) %>%
+  st_read() %>%
+  mutate(treat_id = 1:nrow(.)) %>%
+  dplyr::rename_at(vars(-one_of("geometry")), ~ paste0("trd_", .))
+
+if (!("trd_PlotNum" %in% names(trd_polygons))) {
+  trd_polygons <- mutate(trd_polygons, trd_PlotNum = 1:nrow(trd_polygons))
+}
+```
+
+```{r }
+g_diagnostics <-
+  yield_input_data_pre %>%
+  mutate(plot_data = list(
+    left_join(yield_polygons, input_pct_data_pre, by = "yield_id") %>%
+      mutate(dropped = (ol != 0 | over_lap_test == 1 | deviation_test == 1))
+  )) %>%
+  dplyr::select(var_name_prefix, form, plot_data) %>%
+  #* === input rate ===*#
+  mutate(g_input = list(
+    ggplot(plot_data) +
+      geom_sf(aes(fill = input_rate), color = NA) +
+      geom_sf(data = trd_polygons, color = "red", fill = NA, size = 0.6) +
+      scale_fill_distiller(palette = "Spectral", name = "Input Rate") +
+      theme_void() +
+      ggtitle(paste0(var_name_prefix, "_", form, "Input Rate"))
+  )) %>%
+  #* === outlier test ===*#
+  mutate(g_outlier = list(
+    ggplot(plot_data) +
+      geom_sf(aes(fill = ol), color = NA) +
+      geom_sf(data = trd_polygons, color = "red", fill = NA, size = 0.6) +
+      scale_fill_distiller(palette = "Spectral", name = "Outlier") +
+      theme_void() +
+      ggtitle(paste0(var_name_prefix, "_", form, "Outlier"))
+  )) %>%
+  #* === overlap test ===*#
+  mutate(g_overlap = list(
+    ggplot(plot_data) +
+      geom_sf(aes(fill = factor(over_lap_test)), color = NA) +
+      geom_sf(data = trd_polygons, color = "darkgreen", fill = NA, size = 0.6) +
+      scale_fill_discrete(name = "overlap") +
+      theme_void() +
+      ggtitle(paste0(var_name_prefix, "_", form, "Overlap"))
+  )) %>%
+  #* === deviation test ===*#
+  mutate(g_dev = list(
+    ggplot(plot_data) +
+      geom_sf(aes(fill = factor(deviation_test)), color = NA) +
+      geom_sf(data = trd_polygons, color = "darkgreen", fill = NA, size = 0.6) +
+      scale_fill_discrete(name = "Deviation") +
+      theme_void() +
+      ggtitle(paste0(var_name_prefix, "_", form, "Deviation"))
+  )) %>%
+  #* === drop or not ===*#
+  mutate(g_dropped = list(
+    ggplot(plot_data) +
+      geom_sf(aes(fill = factor(dropped)), color = NA) +
+      geom_sf(data = trd_polygons, color = "darkgreen", fill = NA, size = 0.6) +
+      scale_fill_discrete(name = "Dropped") +
+      theme_void() +
+      ggtitle(paste0(var_name_prefix, "_", form, "Drop or not (1 means drop)"))
+  ))
+```
+
+
+```{r }
+for (i in 1:nrow(g_diagnostics)) {
+  temp <- g_diagnostics[i, ]
+  print(temp$g_input[[1]])
+  print(temp$g_outlier[[1]])
+  print(temp$g_overlap[[1]])
+  print(temp$g_dev[[1]])
+  print(temp$g_dropped[[1]])
+}
+```
+
+

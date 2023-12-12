@@ -1,0 +1,97 @@
+---
+title: R codes to assist Trial Design Coordinators
+---
+
+# Preparation
+
+Load packages and source functions
+
+```{r}
+source(here::here("Functions/prepare.R"))
+```
+
+Specify the farmer_field_year to work on.
+
+```{r}
+ffy <- "ffy_here"
+```
+
+# Add basic information
+
+```{r}
+basic_data <-
+  data.table(
+    yield_file = "23_GSPA_C_VR_HV",
+    trial_design_file = "23_GSPA_C_VR_TR",
+    harvester_width = 30,
+  )
+```
+
+```{r}
+add_basic_info(ffy, basic_data)
+```
+
+# Create input data entry to the json metadata
+
+```{r}
+input_data <-
+  data.table(
+    form = c("NH3", "N_equiv"),
+    product = c("NH3", "ATS"),
+    strategy = c("trial", "base"),
+    file_name = c("23_GSPA_C_VR_FA1", NA),
+    unit = c("lbs", "lbs"),
+    date = c("11/23/2022", "05/07/2023"),
+    Rx_data = c("23_GSPA_C_VR_RX1", "none"),
+    machine_width = c(35, NA),
+    rate = c(NA, 7),
+    var_name_prefix = c("FA1", "none")
+  )
+```
+
+## Add input information
+
+```{r}
+add_inputs(
+  ffy = ffy,
+  input_data = input_data
+)
+```
+
+# Add Rx information
+
+```{r}
+Rx_data <-
+  data.table(
+    form = c("MAP", "UREA32"),
+    model = c("granular", "AdaptN"),
+    file = c("Rx_granular.shp", "Rx_AdaptN.shp"),
+    date = c("04/01/2021", "04/02/2021")
+  )
+```
+
+```{r}
+add_Rx(
+  ffy = ffy,
+  Rx_data = Rx_data
+)
+```
+
+# Add information for extra data
+
+```{r}
+Ex_data <-
+  data.table(
+    data_type = c("NDRE"),
+    file = c("21_BROB_W_SN_SRO.shp"),
+    date = c("04/02/2021"),
+    vars = list(c("NDVI", "Tgt_Rate_N"))
+  )
+```
+
+```{r}
+add_Ex(
+  ffy = ffy,
+  Ex_data = Ex_data
+)
+```

@@ -1,0 +1,39 @@
+---
+title: R codes to assist Trial Design Coordinators
+---
+
+# Preparation
+
+Load packages and source functions
+
+```{r}
+source(here::here("Functions/prepare.R"))
+```
+
+# Create new field parameter entries
+
+Modify the entries of the following code and run.
+
+```{r}
+initiate_fp_entry(
+  farm = "DBAT",
+  field = "1",
+  year = 2023,
+  crop = "corn"
+)
+```
+
+You now have created 
+
++ a basic json entry for this experiment
++ folders 
++ R programs to to 
+  1. add input, Rx, and extra information to the **metadata.json** file for this experiment
+  2. process datasets you specified in the json file in the step above
+
+# Next steps
+
+1. Go to the **DataProcessingReport** folder and find **add_information.rmd** to add input, Rx, and extra information to the **metadata.json** file for this experiment 
+
+2. Go to the **DataProcessingReport** folder and find **process_data.rmd** to process and combine datasets 
+
