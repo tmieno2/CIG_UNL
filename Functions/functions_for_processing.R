@@ -4,7 +4,9 @@
 
 reduce_points_v <- function(data_sf, nobs_per_group, var_interest, ol_var_name, by_var = NA) {
   if (!is.na(by_var)) {
-    data_dt <- data_sf %>%
+
+    data_dt <- 
+      data_sf %>%
       cbind(., st_coordinates(.)) %>%
       data.table() %>%
       setnames(var_interest, "var_i") %>%
@@ -12,7 +14,7 @@ reduce_points_v <- function(data_sf, nobs_per_group, var_interest, ol_var_name, 
       setnames(ol_var_name, "flag_bad") %>%
       .[, dummy := 1] %>%
       .[, id_in_group := (cumsum(dummy) - 1) %/% nobs_per_group + 1, by = group_var] %>%
-      #--- aggregate, but not using points that are flagged "bad" ---#
+      #--- aggregate ---#
       .[, .(
         X = mean(X),
         Y = mean(Y),
@@ -22,7 +24,7 @@ reduce_points_v <- function(data_sf, nobs_per_group, var_interest, ol_var_name, 
         # min_distance = min(distance),
         # max_distance = max(distance),
         # speed = mean(speed),
-        flag_bad = max(flag_bad)
+        flag_bad = mean(flag_bad)
       ),
       by = .(id_in_group, group_var)
       ] %>%
@@ -214,7 +216,8 @@ group_points_sc <- function(data_sf, by_var = NA, angle_threshold) {
 
   # plot(1:39127, angle_dt[!is.na(angle), angle])
 
-  group_dt <- setup_dt %>%
+  group_dt <- 
+    setup_dt %>%
     setorder(group_var, original_order_id) %>%
     .[, d_X := c(0, diff(X)), by = group_var] %>%
     .[, d_Y := c(0, diff(Y)), by = group_var] %>%

@@ -38,9 +38,6 @@ make_grower_folder_files <- function(ffy) {
   file.create(file.path(root_dir, "notes.md"))
   file.create(file.path(root_dir, "meta_data_entry.R"))
 
-  #--- Reports ---#
-  dir.create(paste0(here(), "/Reports/Growers/", ffy))
-
   #++++++++++++++++++++++++++++++++++++
   #+ create add_information.rmd
   #++++++++++++++++++++++++++++++++++++
@@ -361,14 +358,14 @@ initiate_fp_entry <- function(farm, field, year, crop) {
 # json_file <- "metadata.json"
 # json_file <- "metadata_new.json"
 
-add_inputs <- function(ffy, input_data) {
+add_inputs <- function(ffy_w, input_data) {
   existing_data <-
     here::here("Data/CommonData/metadata.json") %>%
     jsonlite::fromJSON(., flatten = TRUE) %>%
     data.table() %>%
     .[, field_year := paste(farm, field, year, sep = "_")]
 
-  w_data <- existing_data[field_year == ffy, ]
+  w_data <- existing_data[field_year == ffy_w, ]
 
   if (nrow(w_data) != 1) {
     print(
@@ -424,7 +421,7 @@ add_inputs <- function(ffy, input_data) {
 
   out_data <-
     rbind(
-      existing_data[field_year != ffy, ],
+      existing_data[field_year != ffy_w, ],
       w_data,
       fill = TRUE
     ) %>%
@@ -453,14 +450,14 @@ add_inputs <- function(ffy, input_data) {
 #   strategy_ls = c("trial", "base")
 # )
 
-add_basic_info <- function(ffy, basic_data) {
+add_basic_info <- function(ffy_w, basic_data) {
   existing_data <-
     here::here("Data/CommonData/metadata.json") %>%
     jsonlite::fromJSON(., flatten = TRUE) %>%
     data.table() %>%
     .[, field_year := paste(farm, field, year, sep = "_")]
 
-  w_data <- existing_data[field_year == ffy, ]
+  w_data <- existing_data[field_year == ffy_w, ]
 
   if (nrow(w_data) != 1) {
     print(
@@ -475,7 +472,7 @@ add_basic_info <- function(ffy, basic_data) {
 
   out_data <-
     rbind(
-      existing_data[field_year != ffy, ],
+      existing_data[field_year != ffy_w, ],
       w_data,
       fill = TRUE
     ) %>%
@@ -503,14 +500,14 @@ add_basic_info <- function(ffy, basic_data) {
 #     date = c("04/01/2021", "04/02/2021")
 #   )
 
-add_Rx <- function(ffy, Rx_data) {
+add_Rx <- function(ffy_w, Rx_data) {
   existing_data <-
     here("Data", "CommonData", "metadata.json") %>%
     jsonlite::fromJSON(., flatten = TRUE) %>%
     data.table() %>%
     .[, field_year := paste(farm, field, year, sep = "_")]
 
-  w_data <- existing_data[field_year == ffy, ]
+  w_data <- existing_data[field_year == ffy_w, ]
 
   if (nrow(w_data) != 1) {
     print(
@@ -566,7 +563,7 @@ add_Rx <- function(ffy, Rx_data) {
 
   out_data <-
     rbind(
-      existing_data[field_year != ffy, ],
+      existing_data[field_year != ffy_w, ],
       w_data,
       fill = TRUE
     ) %>%
@@ -590,8 +587,7 @@ add_Rx <- function(ffy, Rx_data) {
 
 # json_file <- "metadata.json"
 
-add_Ex <- function(ffy, Ex_data) {
-  ffy <- paste(farm, field, year, sep = "_")
+add_Ex <- function(ffy_w, Ex_data) {
 
   existing_data <-
     here("Data", "CommonData", "metadata.json") %>%
@@ -599,7 +595,7 @@ add_Ex <- function(ffy, Ex_data) {
     data.table() %>%
     .[, field_year := paste(farm, field, year, sep = "_")]
 
-  w_data <- existing_data[field_year == ffy, ]
+  w_data <- existing_data[field_year == ffy_w, ]
 
   if (nrow(w_data) != 1) {
     print(
@@ -655,7 +651,7 @@ add_Ex <- function(ffy, Ex_data) {
 
   out_data <-
     rbind(
-      existing_data[field_year != ffy, ],
+      existing_data[field_year != ffy_w, ],
       w_data,
       fill = TRUE
     ) %>%

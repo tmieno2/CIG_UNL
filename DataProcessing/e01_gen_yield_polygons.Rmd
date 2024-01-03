@@ -144,7 +144,8 @@ trd_polygons <-
   ) %>%
   st_read() %>%
   mutate(treat_id = 1:nrow(.)) %>%
-  dplyr::rename_at(vars(-one_of("geometry")), ~ paste0("trd_", .))
+  dplyr::rename_at(vars(-one_of("geometry")), ~ paste0("trd_", .)) %>%
+  st_transform_utm()
 
 if (!("trd_PlotNum" %in% names(trd_polygons))) {
   trd_polygons <- mutate(trd_polygons, trd_PlotNum = 1:nrow(trd_polygons))
@@ -380,15 +381,33 @@ The following yield point reduction occurs when the medium distance between cons
 # about 2 meter (many other yield data points have 2-meter gaps)
 
 if (med_distance < 1) {
-  num_obs_rg <- floor(2 / (med_distance))
+  nobs_per_group <- floor(2 / (med_distance))
 
-  yield_reduced_v <- reduce_points_v(
-    data_sf = yield_grouped,
-    nobs_per_group = num_obs_rg,
-    var_interest = "yield_vol",
-    ol_var_name = "drop_as_outliers",
-    by_var = "group"
-  )
+  yield_reduced_v <-
+    yield_grouped %>%
+    dplyr::mutate(group = paste0(group, trd_PlotNum)) %>%
+    data.table() %>%
+    .[, dummy := 1] %>%
+    .[, id_in_group := (cumsum(dummy) - 1) %/% nobs_per_group + 1, by = group] %>%
+    #--- aggregate ---#
+    .[, .(
+      X = mean(X),
+      Y = mean(Y),
+      width = mean(width),
+      yield_vol = mean(yield_vol),
+      trd_PlotNum = unique(trd_PlotNum),
+      trd_Rep = unique(trd_Rep),
+      ol_yield_vol = mean(ol_yield_vol),
+      ol_speed = mean(ol_speed),
+      drop_as_outliers = mean(drop_as_outliers)
+    ),
+    by = .(id_in_group, group)
+    ] %>%
+    .[, point_id := 1:nrow(.)] %>%
+    .[, n_group := .N, group] %>%
+    .[n_group > 1, ] %>%
+    .[, n_group := NULL]
+    
 } else {
   yield_reduced_v <- data.table(yield_grouped)
 }
@@ -512,9 +531,7 @@ yield_polygons <-
     0
   )) %>%
   dplyr::select(
-    -yield_mass, -distance, -angle, -width, -time, -offset,
-    -X, -Y, -original_order_id, -change_group, -group,
-    -obs_per_group, -area
+    yield_id, yield_vol, drop_as_outliers, ol_speed, ol_yield_vol, trd_PlotNum, trd_Rep, group
   )
 ```
 

@@ -28,3 +28,4 @@
 
 
 # Questions:
+Only add the yield and input data that intersects with the Treatments. Treatments that aren't necessary are "Buffer", "Bulk",or "". Treatments to include are "Sense", "Pivot_Bio", "Check", "AdaptN", Rates:100,150,etc.

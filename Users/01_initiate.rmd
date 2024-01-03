@@ -16,10 +16,10 @@ Modify the entries of the following code and run.
 
 ```{r}
 initiate_fp_entry(
-  farm = "DBAT",
+  farm = "MMUR",
   field = "1",
   year = 2023,
-  crop = "corn"
+  crop = "wheat"
 )
 ```
 

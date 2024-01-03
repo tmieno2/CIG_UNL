@@ -23,7 +23,7 @@ basic_data <-
   data.table(
     yield_file = "23_GSPA_C_VR_HV",
     trial_design_file = "23_GSPA_C_VR_TR",
-    harvester_width = 30,
+    harvester_width = 30
   )
 ```
 
@@ -50,6 +50,8 @@ input_data <-
 ```
 
 ## Add input information
+
+Note: running the following code will overwrite the existing input information in the json file.
 
 ```{r}
 add_inputs(

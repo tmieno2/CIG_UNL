@@ -72,10 +72,10 @@ library(future.apply)
 ```
 
 ```{r preparations, cache = F}
-source(
-  "https://github.com/tmieno2/OnFarmExperiments/blob/master/Functions/prepare.R?raw=TRUE",
-  local = TRUE
-)
+# source(
+#   "https://github.com/tmieno2/OnFarmExperiments/blob/master/Functions/prepare.R?raw=TRUE",
+#   local = TRUE
+# )
 
 #--- github ---#
 source("https://raw.githubusercontent.com/brittanikedge/DIFM/main/Functions.R")
@@ -121,7 +121,7 @@ tm_layout_to_add <-
 # === trial design file ===#
 boundary_sf <-
   here(
-    "Data", "Growers", ffy, "TrialDesign",
+    "Data", "Growers", ffy, "Raw",
     paste0(get_trial_parameter(ffy)$tr_design_data, ".shp")
   ) %>%
   st_read() %>%
@@ -189,7 +189,7 @@ library(soilDB)
 ```{r }
 boundary_sf <-
   here(
-    "Data", "Growers", ffy, "TrialDesign",
+    "Data", "Growers", ffy, "Raw",
     paste0(get_trial_parameter(ffy)$tr_design_data, ".shp")
   ) %>%
   st_read() %>%
@@ -241,7 +241,7 @@ library(lubridate)
 #--- get the boundary ---#
 boundary_sf <-
   here(
-    "Data", "Growers", ffy, "TrialDesign",
+    "Data", "Growers", ffy, "Raw",
     paste0(get_trial_parameter(ffy)$tr_design_data, ".shp")
   ) %>%
   st_read() %>%

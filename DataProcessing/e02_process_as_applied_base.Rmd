@@ -256,7 +256,7 @@ if (recover_section_id) { # if section id is missing even though the data is obs
       mutate(
         new_group = paste(group, sectionid, sep = "_")
       ) %>%
-      arrange(id)
+      arrange(aa_id)
     #--- medium distance between aa_input points ---#
     med_distance_v <- get_med_dist_sec(aa_input_grouped)
   } else {
@@ -302,7 +302,8 @@ if (w_Rx_data != "none") { # if Rx data exists
     input_trial_data %>%
     filter(input_id == w_input_id) %>%
     pull(Rx_data) %>%
-    here("Data/Growers", ffy, "Raw", .) %>%
+    here::here("Data/Growers", ffy, "Raw", .) %>%
+    paste0(., ".shp") %>%
     st_read() %>%
     setnames(input_form, "tgt_input") %>%
     st_transform(st_crs(aa_input_grouped)) %>%
@@ -419,7 +420,11 @@ if (length(zero_rx_id) != 0) {
     dplyr::select(candidate_points, rx_id, w_group) %>%
     nest_by(rx_id) %>%
     mutate(data = list(
-      mutate(data, cluster = kmeans(w_group, num_paths_per_Rx_plot)$cluster)
+      if (nrow(data) > num_paths_per_Rx_plot) {
+        mutate(data, cluster = kmeans(w_group, num_paths_per_Rx_plot)$cluster)
+      } else if (nrow(data) == num_paths_per_Rx_plot) {
+        mutate(data, cluster = w_group)
+      }
     )) %>%
     unnest()
 

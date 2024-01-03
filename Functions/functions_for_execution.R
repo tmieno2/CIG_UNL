@@ -89,7 +89,9 @@ process_yield <- function(ffy, ol_yield_sd_factor = 4) {
     c(exp_temp_rmd, e_yield) %>%
     gsub("field-year-here", ffy, .) %>%
     gsub("title-here", "Yield Data Processing", .) %>%
-    gsub("ol_yield_sd_factor_here", ol_yield_sd_factor, .)
+    gsub("ol_yield_sd_factor_here", ol_yield_sd_factor, .) %>%
+    gsub("num_paths_here", "NA", .)
+
 
   # /*=================================================*/
   #' # Write out the rmd and render
@@ -835,6 +837,8 @@ make_trial_design <- function(ffy,
 # file_name <- "DataProcessing/data_processing_template.Rmd"
 # rmd_file[1:10]
 
+# readLines("https://github.com/tmieno2/CIG_UNL/blob/main/DataProcessing/add_info_to_json_template.rmd?raw=TRUE")
+
 read_rmd <- function(file_name, locally_run = TRUE) {
   if (locally_run == FALSE) {
     file_name_on_github <-
@@ -1057,8 +1061,7 @@ get_input <- function(opt_gc_data, c_type, w_zone) {
 #' # Extract input information from field data
 # /*=================================================*/
 
-get_trial_parameter <- function(ffy) {
-
+get_trial_parameter <- function(ffy_w) {
 
   #--- field data ---#
   field_data <-
@@ -1071,7 +1074,7 @@ get_trial_parameter <- function(ffy) {
     .[, field_year := paste(farm_field, year, sep = "_")]
 
   #--- get field parameters for the field-year ---#
-  w_field_data <- field_data[field_year == ffy, ]
+  w_field_data <- field_data[field_year == ffy_w, ]
 
   w_farm_field <- w_field_data$farm_field
   w_year <- w_field_data$year
