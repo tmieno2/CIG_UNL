@@ -397,6 +397,7 @@ if (med_distance < 1) {
       yield_vol = mean(yield_vol),
       trd_PlotNum = unique(trd_PlotNum),
       trd_Rep = unique(trd_Rep),
+      trd_Trt = unique(trd_Trt),
       ol_yield_vol = mean(ol_yield_vol),
       ol_speed = mean(ol_speed),
       drop_as_outliers = mean(drop_as_outliers)
@@ -531,7 +532,7 @@ yield_polygons <-
     0
   )) %>%
   dplyr::select(
-    yield_id, yield_vol, drop_as_outliers, ol_speed, ol_yield_vol, trd_PlotNum, trd_Rep, group
+    yield_id, yield_vol, drop_as_outliers, ol_speed, ol_yield_vol, trd_PlotNum, trd_Rep, trd_Trt, group
   )
 ```
 

@@ -37,7 +37,7 @@ get_ne_data <- function(ffy, rerun = FALSE, locally_run = FALSE) {
   }
 
   nep_rmd <-
-    readLines(here::here("DataProcessing/get_ne_data.rmd")) %>%
+    read_rmd("DataProcessing/get_ne_data.rmd") %>%
     gsub("field-year-here", ffy, .) %>%
     gsub("title-here", "Non-experiment Data Processing Report", .)
 
@@ -66,7 +66,7 @@ get_ne_data <- function(ffy, rerun = FALSE, locally_run = FALSE) {
 # /*===========================================================
 #' # Process Yield Data
 # /*===========================================================
-process_yield <- function(ffy, ol_yield_sd_factor = 4) {
+process_yield <- function(ffy, ol_yield_sd_factor = 4, num_paths = NA) {
   library(knitr)
   options(knitr.duplicate.label = "allow")
 
@@ -79,10 +79,10 @@ process_yield <- function(ffy, ol_yield_sd_factor = 4) {
   trial_pars <- get_trial_parameter(ffy)
   yield_file <- trial_pars$yield_data
 
-  exp_temp_rmd <- readLines(here::here("DataProcessing/data_processing_template.Rmd"))
+  exp_temp_rmd <- read_rmd("DataProcessing/data_processing_template.Rmd")
 
   e_yield <-
-    readLines(here::here("DataProcessing/e01_gen_yield_polygons.Rmd")) %>%
+    read_rmd("DataProcessing/e01_gen_yield_polygons.Rmd") %>%
     gsub("yield-file-name-here", yield_file, .)
 
   yield_rmd <-
@@ -90,8 +90,7 @@ process_yield <- function(ffy, ol_yield_sd_factor = 4) {
     gsub("field-year-here", ffy, .) %>%
     gsub("title-here", "Yield Data Processing", .) %>%
     gsub("ol_yield_sd_factor_here", ol_yield_sd_factor, .) %>%
-    gsub("num_paths_here", "NA", .)
-
+    gsub("num_paths_here", num_paths, .)
 
   # /*=================================================*/
   #' # Write out the rmd and render
@@ -132,7 +131,7 @@ process_input <- function(ffy, ol_sd_factor = 4, num_paths = NA) {
   trial_pars <- get_trial_parameter(ffy)
   trial_info <- trial_pars$input_data_trial
 
-  template_rmd <- readLines(here::here("DataProcessing/data_processing_template.Rmd"))
+  template_rmd <- read_rmd("DataProcessing/data_processing_template.Rmd")
 
   # /*----------------------------------*/
   #' ## Rmd(s) for input processing
@@ -206,8 +205,8 @@ merge_yield_input <- function(ffy, overlap_acceptance_pct = 0.1, max_dev_ls = NA
   trial_info <- trial_pars$input_data_trial
 
   merge_rmd <-
-    readLines(here::here("DataProcessing/data_processing_template.Rmd")) %>%
-    c(., readLines(here::here("DataProcessing/e03_yield_input_integration.Rmd"))) %>%
+    read_rmd("DataProcessing/data_processing_template.Rmd") %>%
+    c(., read_rmd("DataProcessing/e03_yield_input_integration.Rmd")) %>%
     gsub("field-year-here", ffy, .) %>%
     gsub("title-here", "Merge Yield and Input Data", .) %>%
     gsub("max_dev_here", max_dev_ls, .) %>%
@@ -837,8 +836,6 @@ make_trial_design <- function(ffy,
 # file_name <- "DataProcessing/data_processing_template.Rmd"
 # rmd_file[1:10]
 
-# readLines("https://github.com/tmieno2/CIG_UNL/blob/main/DataProcessing/add_info_to_json_template.rmd?raw=TRUE")
-
 read_rmd <- function(file_name, locally_run = TRUE) {
   if (locally_run == FALSE) {
     file_name_on_github <-
@@ -1063,6 +1060,7 @@ get_input <- function(opt_gc_data, c_type, w_zone) {
 
 get_trial_parameter <- function(ffy_w) {
 
+
   #--- field data ---#
   field_data <-
     jsonlite::fromJSON(
@@ -1075,7 +1073,7 @@ get_trial_parameter <- function(ffy_w) {
 
   #--- get field parameters for the field-year ---#
   w_field_data <- field_data[field_year == ffy_w, ]
-
+  
   w_farm_field <- w_field_data$farm_field
   w_year <- w_field_data$year
 
